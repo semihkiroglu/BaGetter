@@ -68,6 +68,7 @@ public static partial class DependencyInjectionExtensions
         services.AddBaGetterOptions<DatabaseOptions>(nameof(BaGetterOptions.Database));
         services.AddBaGetterOptions<FileSystemStorageOptions>(nameof(BaGetterOptions.Storage));
         services.AddBaGetterOptions<MirrorOptions>(nameof(BaGetterOptions.Mirror));
+        services.AddBaGetterOptions<PackageFilteringOptions>(nameof(BaGetterOptions.PackageFiltering));
         services.AddBaGetterOptions<RetentionOptions>(nameof(BaGetterOptions.Retention));
         services.AddBaGetterOptions<SearchOptions>(nameof(BaGetterOptions.Search));
         services.AddBaGetterOptions<StorageOptions>(nameof(BaGetterOptions.Storage));
@@ -97,6 +98,7 @@ public static partial class DependencyInjectionExtensions
         services.TryAddTransient<IPackageDeletionService, PackageDeletionService>();
         services.TryAddTransient<IPackageIndexingService, PackageIndexingService>();
         services.TryAddTransient<IPackageMetadataService, DefaultPackageMetadataService>();
+        services.TryAddTransient<IPackagePolicyEvaluator, PackagePolicyEvaluator>();
         services.TryAddTransient<IPackageService, PackageService>();
         services.TryAddTransient<IPackageStorageService, PackageStorageService>();
         services.TryAddTransient<IServiceIndexService, BaGetterServiceIndex>();

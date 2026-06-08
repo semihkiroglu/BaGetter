@@ -14,19 +14,23 @@ namespace BaGetter.Azure
     public class TableSearchService : ISearchService
     {
         private readonly TableClient _table;
+        private readonly IPackagePolicyEvaluator _policy;
         private readonly ISearchResponseBuilder _responseBuilder;
 
         public TableSearchService(
             TableServiceClient client,
             ISearchResponseBuilder responseBuilder,
-            IOptionsSnapshot<AzureTableOptions> options)
+            IOptionsSnapshot<AzureTableOptions> options,
+            IPackagePolicyEvaluator policy)
         {
             ArgumentNullException.ThrowIfNull(client, nameof(client));
             ArgumentNullException.ThrowIfNull(responseBuilder, nameof(responseBuilder));
             ArgumentNullException.ThrowIfNull(options, nameof(options));
+            ArgumentNullException.ThrowIfNull(policy, nameof(policy));
 
             _table = client.GetTableClient(options.Value.TableName);
             _responseBuilder = responseBuilder;
+            _policy = policy;
         }
 
         public async Task<SearchResponse> SearchAsync(
@@ -92,11 +96,22 @@ namespace BaGetter.Azure
             var results = await LoadPackagesAsync(query, maxPartitions: skip + take);
 
             return results
+                .Where(IsAllowed)
                 .GroupBy(p => p.Id, StringComparer.OrdinalIgnoreCase)
                 .Select(group => new PackageRegistration(group.Key, group.ToList()))
                 .Skip(skip)
                 .Take(take)
                 .ToList();
+        }
+
+        private bool IsAllowed(Package package)
+        {
+            var scope = string.IsNullOrEmpty(package.CachedFrom)
+                ? PackageFilterScope.Local
+                : PackageFilterScope.CachedUpstream;
+
+            return !_policy.Evaluate(
+                new PackageFilterContext(package.Id, package.Version, scope)).IsBlocked;
         }
 
         private static async Task<IReadOnlyList<Package>> LoadPackagesAsync(

@@ -12,17 +12,24 @@ public class DatabaseSearchService : ISearchService
 {
     private readonly IContext _context;
     private readonly IFrameworkCompatibilityService _frameworks;
+    private readonly IPackagePolicyEvaluator _policy;
     private readonly ISearchResponseBuilder _searchBuilder;
 
-    public DatabaseSearchService(IContext context, IFrameworkCompatibilityService frameworks, ISearchResponseBuilder searchBuilder)
+    public DatabaseSearchService(
+        IContext context,
+        IFrameworkCompatibilityService frameworks,
+        ISearchResponseBuilder searchBuilder,
+        IPackagePolicyEvaluator policy)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(frameworks);
         ArgumentNullException.ThrowIfNull(searchBuilder);
+        ArgumentNullException.ThrowIfNull(policy);
 
         _context = context;
         _frameworks = frameworks;
         _searchBuilder = searchBuilder;
+        _policy = policy;
     }
 
     public async Task<SearchResponse> SearchAsync(SearchRequest request, CancellationToken cancellationToken)
@@ -69,7 +76,9 @@ public class DatabaseSearchService : ISearchService
             request.PackageType,
             frameworks);
 
-        var results = await search.ToListAsync(cancellationToken);
+        var results = (await search.ToListAsync(cancellationToken))
+            .Where(IsAllowed)
+            .ToList();
         var groupedResults = results
             .GroupBy(p => p.Id, StringComparer.OrdinalIgnoreCase)
             .Select(group => new PackageRegistration(group.Key, group.ToList()))
@@ -98,7 +107,17 @@ public class DatabaseSearchService : ISearchService
             .Take(request.Take)
             .ToListAsync(cancellationToken);
 
-        return _searchBuilder.BuildAutocomplete(packageIds);
+        var packages = await _context.Packages
+            .Where(p => packageIds.Contains(p.Id))
+            .ToListAsync(cancellationToken);
+
+        var allowedPackageIds = packageIds
+            .Where(id => packages.Any(p =>
+                string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase) &&
+                IsAllowed(p)))
+            .ToList();
+
+        return _searchBuilder.BuildAutocomplete(allowedPackageIds);
     }
 
     public async Task<AutocompleteResponse> ListPackageVersionsAsync(VersionsRequest request, CancellationToken cancellationToken)
@@ -115,9 +134,10 @@ public class DatabaseSearchService : ISearchService
             packageType: null,
             frameworks: null);
 
-        var packageVersions = await search
+        var packageVersions = (await search.ToListAsync(cancellationToken))
+            .Where(IsAllowed)
             .Select(p => p.NormalizedVersionString)
-            .ToListAsync(cancellationToken);
+            .ToList();
 
         return _searchBuilder.BuildAutocomplete(packageVersions);
     }
@@ -190,5 +210,15 @@ public class DatabaseSearchService : ISearchService
         if (framework == null) return null;
 
         return _frameworks.FindAllCompatibleFrameworks(framework);
+    }
+
+    private bool IsAllowed(Package package)
+    {
+        var scope = string.IsNullOrEmpty(package.CachedFrom)
+            ? PackageFilterScope.Local
+            : PackageFilterScope.CachedUpstream;
+
+        return !_policy.Evaluate(
+            new PackageFilterContext(package.Id, package.Version, scope)).IsBlocked;
     }
 }

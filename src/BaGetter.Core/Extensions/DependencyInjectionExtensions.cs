@@ -98,7 +98,8 @@ public static partial class DependencyInjectionExtensions
         services.TryAddTransient<IPackageDeletionService, PackageDeletionService>();
         services.TryAddTransient<IPackageIndexingService, PackageIndexingService>();
         services.TryAddTransient<IPackageMetadataService, DefaultPackageMetadataService>();
-        services.TryAddTransient<IPackagePolicyEvaluator, PackagePolicyEvaluator>();
+        services.TryAddSingleton<IPackagePolicyEvaluator, PackagePolicyEvaluator>();
+        services.TryAddTransient<IPackageSearchService, PackageFilteringSearchService>();
         services.TryAddTransient<IPackageService, PackageService>();
         services.TryAddTransient<IPackageStorageService, PackageStorageService>();
         services.TryAddTransient<IServiceIndexService, BaGetterServiceIndex>();

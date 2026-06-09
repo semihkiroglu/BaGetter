@@ -14,23 +14,19 @@ namespace BaGetter.Azure
     public class TableSearchService : ISearchService
     {
         private readonly TableClient _table;
-        private readonly IPackagePolicyEvaluator _policy;
         private readonly ISearchResponseBuilder _responseBuilder;
 
         public TableSearchService(
             TableServiceClient client,
             ISearchResponseBuilder responseBuilder,
-            IOptionsSnapshot<AzureTableOptions> options,
-            IPackagePolicyEvaluator policy)
+            IOptionsSnapshot<AzureTableOptions> options)
         {
             ArgumentNullException.ThrowIfNull(client, nameof(client));
             ArgumentNullException.ThrowIfNull(responseBuilder, nameof(responseBuilder));
             ArgumentNullException.ThrowIfNull(options, nameof(options));
-            ArgumentNullException.ThrowIfNull(policy, nameof(policy));
 
             _table = client.GetTableClient(options.Value.TableName);
             _responseBuilder = responseBuilder;
-            _policy = policy;
         }
 
         public async Task<SearchResponse> SearchAsync(
@@ -93,67 +89,14 @@ namespace BaGetter.Azure
         {
             var query = _table.QueryAsync<PackageEntity>(GenerateSearchFilter(searchText, includePrerelease, includeSemVer2), cancellationToken: cancellationToken);
 
-            IReadOnlyList<PackageRegistration> results;
-            if (_policy.IsFilteringEnabled)
-            {
-                results = await LoadAllowedPackagesAsync(query, skip + take);
-            }
-            else
-            {
-                results = (await LoadPackagesAsync(query, skip + take))
-                    .GroupBy(p => p.Id, StringComparer.OrdinalIgnoreCase)
-                    .Select(group => new PackageRegistration(group.Key, group.ToList()))
-                    .ToList();
-            }
+            var results = await LoadPackagesAsync(query, maxPartitions: skip + take);
 
             return results
+                .GroupBy(p => p.Id, StringComparer.OrdinalIgnoreCase)
+                .Select(group => new PackageRegistration(group.Key, group.ToList()))
                 .Skip(skip)
                 .Take(take)
                 .ToList();
-        }
-
-        private bool IsAllowed(Package package)
-        {
-            var scope = string.IsNullOrEmpty(package.CachedFrom)
-                ? PackageFilterScope.Local
-                : PackageFilterScope.CachedUpstream;
-
-            return !_policy.Evaluate(
-                new PackageFilterContext(package.Id, package.Version, scope)).IsBlocked;
-        }
-
-        private async Task<IReadOnlyList<PackageRegistration>> LoadAllowedPackagesAsync(
-            AsyncPageable<PackageEntity> query,
-            int maxPartitions)
-        {
-            var results = new List<PackageRegistration>();
-            var partition = new List<Package>();
-            string partitionKey = null;
-
-            await foreach (var result in query)
-            {
-                if (partitionKey != null && partitionKey != result.PartitionKey)
-                {
-                    AddAllowedPartition(partition, results);
-
-                    if (results.Count >= maxPartitions)
-                    {
-                        break;
-                    }
-
-                    partition.Clear();
-                }
-
-                partitionKey = result.PartitionKey;
-                partition.Add(result.AsPackage());
-            }
-
-            if (results.Count < maxPartitions)
-            {
-                AddAllowedPartition(partition, results);
-            }
-
-            return results;
         }
 
         private static async Task<IReadOnlyList<Package>> LoadPackagesAsync(
@@ -161,6 +104,7 @@ namespace BaGetter.Azure
             int maxPartitions)
         {
             var results = new List<Package>();
+
             var partitions = 0;
             string lastPartitionKey = null;
 
@@ -181,17 +125,6 @@ namespace BaGetter.Azure
             }
 
             return results;
-        }
-
-        private void AddAllowedPartition(
-            IReadOnlyList<Package> partition,
-            List<PackageRegistration> results)
-        {
-            var packages = partition.Where(IsAllowed).ToList();
-            if (packages.Count > 0)
-            {
-                results.Add(new PackageRegistration(packages[0].Id, packages));
-            }
         }
 
         private static string GenerateSearchFilter(string searchText, bool includePrerelease, bool includeSemVer2)

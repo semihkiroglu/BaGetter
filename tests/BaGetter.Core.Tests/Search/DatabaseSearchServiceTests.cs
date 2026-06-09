@@ -12,10 +12,9 @@ public class DatabaseSearchServiceTests
         // Arrange
         var frameworkCompatibilityService = new Mock<IFrameworkCompatibilityService>();
         var searchResponseBuilder = new Mock<ISearchResponseBuilder>();
-        var policy = new Mock<IPackagePolicyEvaluator>();
 
         // Act/Assert
-        var ex = Assert.Throws<ArgumentNullException>(() => new DatabaseSearchService(null, frameworkCompatibilityService.Object, searchResponseBuilder.Object, policy.Object));
+        var ex = Assert.Throws<ArgumentNullException>(() => new DatabaseSearchService(null, frameworkCompatibilityService.Object, searchResponseBuilder.Object));
     }
 
     [Fact]
@@ -24,10 +23,9 @@ public class DatabaseSearchServiceTests
         // Arrange
         var context = new Mock<IContext>();
         var searchResponseBuilder = new Mock<ISearchResponseBuilder>();
-        var policy = new Mock<IPackagePolicyEvaluator>();
 
         // Act/Assert
-        var ex = Assert.Throws<ArgumentNullException>(() => new DatabaseSearchService(context.Object, null, searchResponseBuilder.Object, policy.Object));
+        var ex = Assert.Throws<ArgumentNullException>(() => new DatabaseSearchService(context.Object, null, searchResponseBuilder.Object));
     }
 
     [Fact]
@@ -36,23 +34,8 @@ public class DatabaseSearchServiceTests
         // Arrange
         var context = new Mock<IContext>();
         var frameworkCompatibilityService = new Mock<IFrameworkCompatibilityService>();
-        var policy = new Mock<IPackagePolicyEvaluator>();
 
         // Act/Assert
-        var ex = Assert.Throws<ArgumentNullException>(() => new DatabaseSearchService(context.Object, frameworkCompatibilityService.Object, null, policy.Object));
-    }
-
-    [Fact]
-    public void Ctor_PolicyIsNull_ShouldThrow()
-    {
-        var context = new Mock<IContext>();
-        var frameworkCompatibilityService = new Mock<IFrameworkCompatibilityService>();
-        var searchResponseBuilder = new Mock<ISearchResponseBuilder>();
-
-        Assert.Throws<ArgumentNullException>(() => new DatabaseSearchService(
-            context.Object,
-            frameworkCompatibilityService.Object,
-            searchResponseBuilder.Object,
-            null));
+        var ex = Assert.Throws<ArgumentNullException>(() => new DatabaseSearchService(context.Object, frameworkCompatibilityService.Object, null));
     }
 }

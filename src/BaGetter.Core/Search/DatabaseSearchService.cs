@@ -45,30 +45,43 @@ public class DatabaseSearchService : ISearchService
             request.PackageType,
             frameworks);
 
-        var packageIds = search
-            .Select(p => p.Id)
-            .Distinct()
-            .OrderBy(id => id)
-            .Skip(request.Skip)
-            .Take(request.Take);
-
-        // This query MUST fetch all versions for each package that matches the search,
-        // otherwise the results for a package's latest version may be incorrect.
-        // If possible, we'll find all these packages in a single query by matching
-        // the package IDs in a subquery. Otherwise, run two queries:
-        //   1. Find the package IDs that match the search
-        //   2. Find all package versions for these package IDs
-        if (_context.SupportsLimitInSubqueries)
+        if (_policy.IsFilteringEnabled)
         {
+            var packageIds = await GetAllowedPackageIdsAsync(
+                search.Select(p => p.Id).Distinct().OrderBy(id => id),
+                search,
+                request.Skip,
+                request.Take,
+                cancellationToken);
+
+            if (packageIds.Count == 0)
+            {
+                return _searchBuilder.BuildSearch(new List<PackageRegistration>());
+            }
+
             search = _context.Packages.Where(p => packageIds.Contains(p.Id));
         }
         else
         {
-            var packageIdResults = await packageIds.ToListAsync(cancellationToken);
+            var packageIds = search
+                .Select(p => p.Id)
+                .Distinct()
+                .OrderBy(id => id)
+                .Skip(request.Skip)
+                .Take(request.Take);
 
-            search = _context.Packages.Where(p => packageIdResults.Contains(p.Id));
+            if (_context.SupportsLimitInSubqueries)
+            {
+                search = _context.Packages.Where(p => packageIds.Contains(p.Id));
+            }
+            else
+            {
+                var packageIdResults = await packageIds.ToListAsync(cancellationToken);
+                search = _context.Packages.Where(p => packageIdResults.Contains(p.Id));
+            }
         }
 
+        // Fetch every matching version for the selected package IDs so the latest version is correct.
         search = ApplySearchFilters(
             search,
             request.IncludePrerelease,
@@ -76,9 +89,11 @@ public class DatabaseSearchService : ISearchService
             request.PackageType,
             frameworks);
 
-        var results = (await search.ToListAsync(cancellationToken))
-            .Where(IsAllowed)
-            .ToList();
+        var results = await search.ToListAsync(cancellationToken);
+        if (_policy.IsFilteringEnabled)
+        {
+            results = results.Where(IsAllowed).ToList();
+        }
         var groupedResults = results
             .GroupBy(p => p.Id, StringComparer.OrdinalIgnoreCase)
             .Select(group => new PackageRegistration(group.Key, group.ToList()))
@@ -99,23 +114,26 @@ public class DatabaseSearchService : ISearchService
             request.PackageType,
             frameworks: null);
 
-        var packageIds = await search
-            .OrderByDescending(p => p.Downloads)
-            .Select(p => p.Id)
-            .Distinct()
-            .Skip(request.Skip)
-            .Take(request.Take)
-            .ToListAsync(cancellationToken);
-
-        var packages = await _context.Packages
-            .Where(p => packageIds.Contains(p.Id))
-            .ToListAsync(cancellationToken);
-
-        var allowedPackageIds = packageIds
-            .Where(id => packages.Any(p =>
-                string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase) &&
-                IsAllowed(p)))
-            .ToList();
+        IReadOnlyList<string> allowedPackageIds;
+        if (_policy.IsFilteringEnabled)
+        {
+            allowedPackageIds = await GetAllowedPackageIdsAsync(
+                search.OrderByDescending(p => p.Downloads).Select(p => p.Id).Distinct(),
+                search,
+                request.Skip,
+                request.Take,
+                cancellationToken);
+        }
+        else
+        {
+            allowedPackageIds = await search
+                .OrderByDescending(p => p.Downloads)
+                .Select(p => p.Id)
+                .Distinct()
+                .Skip(request.Skip)
+                .Take(request.Take)
+                .ToListAsync(cancellationToken);
+        }
 
         return _searchBuilder.BuildAutocomplete(allowedPackageIds);
     }
@@ -134,10 +152,20 @@ public class DatabaseSearchService : ISearchService
             packageType: null,
             frameworks: null);
 
-        var packageVersions = (await search.ToListAsync(cancellationToken))
-            .Where(IsAllowed)
-            .Select(p => p.NormalizedVersionString)
-            .ToList();
+        IReadOnlyList<string> packageVersions;
+        if (_policy.IsFilteringEnabled)
+        {
+            packageVersions = (await search.ToListAsync(cancellationToken))
+                .Where(IsAllowed)
+                .Select(p => p.NormalizedVersionString)
+                .ToList();
+        }
+        else
+        {
+            packageVersions = await search
+                .Select(p => p.NormalizedVersionString)
+                .ToListAsync(cancellationToken);
+        }
 
         return _searchBuilder.BuildAutocomplete(packageVersions);
     }
@@ -210,6 +238,73 @@ public class DatabaseSearchService : ISearchService
         if (framework == null) return null;
 
         return _frameworks.FindAllCompatibleFrameworks(framework);
+    }
+
+    private async Task<List<string>> GetAllowedPackageIdsAsync(
+        IQueryable<string> packageIds,
+        IQueryable<Package> packages,
+        int skip,
+        int take,
+        CancellationToken cancellationToken)
+    {
+        var results = new List<string>();
+        if (take <= 0)
+        {
+            return results;
+        }
+
+        var offset = 0;
+        var remainingSkip = skip;
+        var batchSize = Math.Max(take, 20);
+
+        while (results.Count < take)
+        {
+            var batch = await packageIds
+                .Skip(offset)
+                .Take(batchSize)
+                .ToListAsync(cancellationToken);
+
+            if (batch.Count == 0)
+            {
+                break;
+            }
+
+            offset += batch.Count;
+
+            var allowedIds = (await packages
+                    .Where(package => batch.Contains(package.Id))
+                    .ToListAsync(cancellationToken))
+                .Where(IsAllowed)
+                .Select(package => package.Id)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var packageId in batch)
+            {
+                if (!allowedIds.Contains(packageId))
+                {
+                    continue;
+                }
+
+                if (remainingSkip > 0)
+                {
+                    remainingSkip--;
+                    continue;
+                }
+
+                results.Add(packageId);
+                if (results.Count == take)
+                {
+                    break;
+                }
+            }
+
+            if (batch.Count < batchSize)
+            {
+                break;
+            }
+        }
+
+        return results;
     }
 
     private bool IsAllowed(Package package)

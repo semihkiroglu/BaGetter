@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
+using NuGet.Packaging;
+using NuGet.Versioning;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -92,9 +95,29 @@ public class PackageFilteringIntegrationTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
+    [Fact]
+    public async Task SearchPaginationSkipsBlockedPackages()
+    {
+        using var app = CreateDownstream(
+            upstreamClient: null,
+            blockedPackageId: "Example.Blocked");
+        using var blockedPackage = CreatePackage("Example.Blocked");
+        using var allowedPackage = CreatePackage("Example.Allowed");
+        await app.AddCachedPackageAsync(blockedPackage, "https://packages.example/v3/index.json");
+        await app.AddPackageAsync(allowedPackage);
+
+        using var response = await app.CreateClient().GetAsync("v3/search?take=1");
+        var content = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains(@"""id"":""Example.Allowed""", content);
+        Assert.DoesNotContain(@"""id"":""Example.Blocked""", content);
+    }
+
     private BaGetterApplication CreateDownstream(
         HttpClient upstreamClient,
-        bool enabled = true)
+        bool enabled = true,
+        string blockedPackageId = "TestData")
     {
         return new BaGetterApplication(
             _output,
@@ -103,8 +126,29 @@ public class PackageFilteringIntegrationTests
             {
                 configuration["PackageFiltering:Enabled"] = enabled.ToString();
                 configuration["PackageFiltering:BlockCachedPackages"] = "true";
-                configuration["PackageFiltering:Rules:0:PackageId"] = "TestData";
+                configuration["PackageFiltering:Rules:0:PackageId"] = blockedPackageId;
                 configuration["PackageFiltering:Rules:0:Versions"] = "*";
             });
+    }
+
+    private static MemoryStream CreatePackage(string packageId)
+    {
+        var builder = new PackageBuilder
+        {
+            Id = packageId,
+            Version = NuGetVersion.Parse("1.0.0"),
+            Description = "Generated test package"
+        };
+        builder.Authors.Add("Test Author");
+        builder.Files.Add(new PhysicalPackageFile
+        {
+            SourcePath = typeof(PackageFilteringIntegrationTests).Assembly.Location,
+            TargetPath = "lib/net9.0/Test.dll"
+        });
+
+        var stream = new MemoryStream();
+        builder.Save(stream);
+        stream.Position = 0;
+        return stream;
     }
 }

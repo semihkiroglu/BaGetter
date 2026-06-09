@@ -13,7 +13,7 @@ public class PackagePolicyEvaluator : IPackagePolicyEvaluator
 
     private readonly PackageFilteringOptions _options;
     private readonly ILogger<PackagePolicyEvaluator> _logger;
-    private readonly IReadOnlyList<CompiledRule> _rules;
+    private readonly List<CompiledRule> _rules;
 
     public PackagePolicyEvaluator(
         IOptions<PackageFilteringOptions> options,
@@ -27,11 +27,13 @@ public class PackagePolicyEvaluator : IPackagePolicyEvaluator
         _rules = CompileRules(_options.Rules);
     }
 
+    public bool IsFilteringEnabled => _options.Enabled && _rules.Count > 0;
+
     public PackageFilterDecision Evaluate(PackageFilterContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        if (!_options.Enabled ||
+        if (!IsFilteringEnabled ||
             context.Scope == PackageFilterScope.Local ||
             (context.Scope == PackageFilterScope.CachedUpstream && !_options.BlockCachedPackages))
         {

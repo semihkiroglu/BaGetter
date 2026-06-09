@@ -93,12 +93,20 @@ namespace BaGetter.Azure
         {
             var query = _table.QueryAsync<PackageEntity>(GenerateSearchFilter(searchText, includePrerelease, includeSemVer2), cancellationToken: cancellationToken);
 
-            var results = await LoadPackagesAsync(query, maxPartitions: skip + take);
+            IReadOnlyList<PackageRegistration> results;
+            if (_policy.IsFilteringEnabled)
+            {
+                results = await LoadAllowedPackagesAsync(query, skip + take);
+            }
+            else
+            {
+                results = (await LoadPackagesAsync(query, skip + take))
+                    .GroupBy(p => p.Id, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new PackageRegistration(group.Key, group.ToList()))
+                    .ToList();
+            }
 
             return results
-                .Where(IsAllowed)
-                .GroupBy(p => p.Id, StringComparer.OrdinalIgnoreCase)
-                .Select(group => new PackageRegistration(group.Key, group.ToList()))
                 .Skip(skip)
                 .Take(take)
                 .ToList();
@@ -114,12 +122,45 @@ namespace BaGetter.Azure
                 new PackageFilterContext(package.Id, package.Version, scope)).IsBlocked;
         }
 
+        private async Task<IReadOnlyList<PackageRegistration>> LoadAllowedPackagesAsync(
+            AsyncPageable<PackageEntity> query,
+            int maxPartitions)
+        {
+            var results = new List<PackageRegistration>();
+            var partition = new List<Package>();
+            string partitionKey = null;
+
+            await foreach (var result in query)
+            {
+                if (partitionKey != null && partitionKey != result.PartitionKey)
+                {
+                    AddAllowedPartition(partition, results);
+
+                    if (results.Count >= maxPartitions)
+                    {
+                        break;
+                    }
+
+                    partition.Clear();
+                }
+
+                partitionKey = result.PartitionKey;
+                partition.Add(result.AsPackage());
+            }
+
+            if (results.Count < maxPartitions)
+            {
+                AddAllowedPartition(partition, results);
+            }
+
+            return results;
+        }
+
         private static async Task<IReadOnlyList<Package>> LoadPackagesAsync(
             AsyncPageable<PackageEntity> query,
             int maxPartitions)
         {
             var results = new List<Package>();
-
             var partitions = 0;
             string lastPartitionKey = null;
 
@@ -140,6 +181,17 @@ namespace BaGetter.Azure
             }
 
             return results;
+        }
+
+        private void AddAllowedPartition(
+            IReadOnlyList<Package> partition,
+            List<PackageRegistration> results)
+        {
+            var packages = partition.Where(IsAllowed).ToList();
+            if (packages.Count > 0)
+            {
+                results.Add(new PackageRegistration(packages[0].Id, packages));
+            }
         }
 
         private static string GenerateSearchFilter(string searchText, bool includePrerelease, bool includeSemVer2)

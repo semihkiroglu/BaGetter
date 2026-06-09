@@ -157,6 +157,40 @@ The following `Mirror` setting configures BaGetter to index packages from [nuget
 
 :::
 
+## Filter upstream packages
+
+Package filtering can prevent selected packages or versions from being proxied from an upstream source.
+Rules support case-insensitive package ID matching, simple `*` wildcards, and
+[NuGet version ranges](https://learn.microsoft.com/nuget/concepts/package-versioning#version-ranges).
+
+```json
+{
+    ...
+
+    "PackageFiltering": {
+        "Enabled": true,
+        "BlockCachedPackages": true,
+        "Rules": [
+            {
+                "PackageId": "Example.Package",
+                "Versions": "*"
+            },
+            {
+                "PackageId": "Example.Tools.*",
+                "Versions": "[2.0.0,3.0.0)"
+            }
+        ]
+    },
+
+    ...
+}
+```
+
+`Versions` can be `*` to block every version, or a NuGet version range such as `[2.0.0,3.0.0)`.
+When `BlockCachedPackages` is `true`, matching packages that were previously cached from the
+upstream source are hidden and return `404`. Packages published directly to BaGetter are never
+blocked by these rules.
+
 ## Enable package hard deletions
 
 To prevent the ["left pad" problem](https://blog.npmjs.org/post/141577284765/kik-left-pad-and-npm),

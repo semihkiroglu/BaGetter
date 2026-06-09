@@ -14,10 +14,11 @@ public class PackagePolicyEvaluatorTests
     {
         var target = CreateTarget(
             enabled: false,
-            new PackageFilterRuleOptions { PackageId = "AutoMapper", Versions = "*" });
+            new PackageFilterRuleOptions { PackageId = "Example.Package", Versions = "*" });
 
-        var result = target.Evaluate(Upstream("AutoMapper", "13.0.0"));
+        var result = target.Evaluate(Upstream("Example.Package", "2.0.0"));
 
+        Assert.False(target.IsFilteringEnabled);
         Assert.False(result.IsBlocked);
     }
 
@@ -26,8 +27,9 @@ public class PackagePolicyEvaluatorTests
     {
         var target = CreateTarget(enabled: true);
 
-        var result = target.Evaluate(Upstream("AutoMapper", "13.0.0"));
+        var result = target.Evaluate(Upstream("Example.Package", "2.0.0"));
 
+        Assert.False(target.IsFilteringEnabled);
         Assert.False(result.IsBlocked);
     }
 
@@ -36,10 +38,11 @@ public class PackagePolicyEvaluatorTests
     {
         var target = CreateTarget(
             enabled: true,
-            new PackageFilterRuleOptions { PackageId = "AutoMapper", Versions = "*" });
+            new PackageFilterRuleOptions { PackageId = "Example.Package", Versions = "*" });
 
-        Assert.True(target.Evaluate(Upstream("AutoMapper", "1.0.0")).IsBlocked);
-        Assert.True(target.Evaluate(Upstream("AutoMapper", "13.0.0")).IsBlocked);
+        Assert.True(target.IsFilteringEnabled);
+        Assert.True(target.Evaluate(Upstream("Example.Package", "1.0.0")).IsBlocked);
+        Assert.True(target.Evaluate(Upstream("Example.Package", "2.0.0")).IsBlocked);
     }
 
     [Fact]
@@ -47,11 +50,11 @@ public class PackagePolicyEvaluatorTests
     {
         var target = CreateTarget(
             enabled: true,
-            new PackageFilterRuleOptions { PackageId = "AutoMapper", Versions = "[13.0.0,)" });
+            new PackageFilterRuleOptions { PackageId = "Example.Package", Versions = "[2.0.0,)" });
 
-        Assert.False(target.Evaluate(Upstream("AutoMapper", "12.0.1")).IsBlocked);
-        Assert.True(target.Evaluate(Upstream("AutoMapper", "13.0.0")).IsBlocked);
-        Assert.True(target.Evaluate(Upstream("AutoMapper", "14.0.0")).IsBlocked);
+        Assert.False(target.Evaluate(Upstream("Example.Package", "1.9.0")).IsBlocked);
+        Assert.True(target.Evaluate(Upstream("Example.Package", "2.0.0")).IsBlocked);
+        Assert.True(target.Evaluate(Upstream("Example.Package", "3.0.0")).IsBlocked);
     }
 
     [Fact]
@@ -59,10 +62,10 @@ public class PackagePolicyEvaluatorTests
     {
         var target = CreateTarget(
             enabled: true,
-            new PackageFilterRuleOptions { PackageId = "WixToolset.*", Versions = "*" });
+            new PackageFilterRuleOptions { PackageId = "Example.Tools.*", Versions = "*" });
 
-        Assert.True(target.Evaluate(Upstream("WixToolset.BuildTools", "5.0.0")).IsBlocked);
-        Assert.False(target.Evaluate(Upstream("WixToolset", "5.0.0")).IsBlocked);
+        Assert.True(target.Evaluate(Upstream("Example.Tools.Build", "1.0.0")).IsBlocked);
+        Assert.False(target.Evaluate(Upstream("Example.Tools", "1.0.0")).IsBlocked);
     }
 
     [Fact]
@@ -70,9 +73,9 @@ public class PackagePolicyEvaluatorTests
     {
         var target = CreateTarget(
             enabled: true,
-            new PackageFilterRuleOptions { PackageId = "AutoMapper", Versions = "*" });
+            new PackageFilterRuleOptions { PackageId = "Example.Package", Versions = "*" });
 
-        Assert.True(target.Evaluate(Upstream("automapper", "13.0.0")).IsBlocked);
+        Assert.True(target.Evaluate(Upstream("example.package", "2.0.0")).IsBlocked);
     }
 
     [Fact]
@@ -81,11 +84,11 @@ public class PackagePolicyEvaluatorTests
         var target = CreateTarget(
             enabled: true,
             blockCachedPackages: false,
-            new PackageFilterRuleOptions { PackageId = "AutoMapper", Versions = "*" });
+            new PackageFilterRuleOptions { PackageId = "Example.Package", Versions = "*" });
 
         var result = target.Evaluate(new PackageFilterContext(
-            "AutoMapper",
-            NuGetVersion.Parse("13.0.0"),
+            "Example.Package",
+            NuGetVersion.Parse("2.0.0"),
             PackageFilterScope.CachedUpstream));
 
         Assert.False(result.IsBlocked);
@@ -96,11 +99,11 @@ public class PackagePolicyEvaluatorTests
     {
         var target = CreateTarget(
             enabled: true,
-            new PackageFilterRuleOptions { PackageId = "AutoMapper", Versions = "*" });
+            new PackageFilterRuleOptions { PackageId = "Example.Package", Versions = "*" });
 
         var result = target.Evaluate(new PackageFilterContext(
-            "AutoMapper",
-            NuGetVersion.Parse("13.0.0"),
+            "Example.Package",
+            NuGetVersion.Parse("2.0.0"),
             PackageFilterScope.Local));
 
         Assert.False(result.IsBlocked);

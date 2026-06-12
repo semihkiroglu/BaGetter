@@ -44,16 +44,18 @@ public class PackageFilteringSearchService : IPackageSearchService
         }
 
         var targetCount = GetTargetCount(request.Skip, request.Take);
-        var registrations = new List<PackageRegistration>();
+        var filteredResults = new List<SearchResult>();
         var seenPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var sourceSkip = 0;
         var batchSize = Math.Max(request.Take, MinimumBatchSize);
+        SearchContext context = null;
 
-        while (registrations.Count < targetCount)
+        while (filteredResults.Count < targetCount)
         {
             var response = await _inner.SearchAsync(
                 Clone(request, sourceSkip, batchSize),
                 cancellationToken);
+            context ??= response.Context;
             var results = response.Data ?? Array.Empty<SearchResult>();
 
             if (results.Count == 0)
@@ -70,13 +72,13 @@ public class PackageFilteringSearchService : IPackageSearchService
                 }
 
                 discoveredPackage = true;
-                var registration = await GetAllowedRegistrationAsync(result, cancellationToken);
-                if (registration != null)
+                var filteredResult = await FilterSearchResultAsync(result, cancellationToken);
+                if (filteredResult != null)
                 {
-                    registrations.Add(registration);
+                    filteredResults.Add(filteredResult);
                 }
 
-                if (registrations.Count == targetCount)
+                if (filteredResults.Count == targetCount)
                 {
                     break;
                 }
@@ -89,8 +91,17 @@ public class PackageFilteringSearchService : IPackageSearchService
             }
         }
 
-        return _responseBuilder.BuildSearch(
-            registrations.Skip(request.Skip).Take(request.Take).ToList());
+        var data = filteredResults
+            .Skip(request.Skip)
+            .Take(request.Take)
+            .ToList();
+
+        return new SearchResponse
+        {
+            Context = context ?? _responseBuilder.BuildSearch(new List<PackageRegistration>()).Context,
+            TotalHits = filteredResults.Count,
+            Data = data
+        };
     }
 
     public async Task<AutocompleteResponse> AutocompleteAsync(
@@ -134,7 +145,8 @@ public class PackageFilteringSearchService : IPackageSearchService
                     includeUnlisted: false,
                     cancellationToken);
 
-                if (packages.Any(IsAllowed))
+                if ((packages.Count == 0 && IsAllowed(packageId, version: null, PackageFilterScope.Upstream)) ||
+                    packages.Any(IsAllowed))
                 {
                     allowedPackageIds.Add(packageId);
                 }
@@ -170,14 +182,22 @@ public class PackageFilteringSearchService : IPackageSearchService
             request.PackageId,
             includeUnlisted: false,
             cancellationToken);
-        var allowedVersions = packages
-            .Where(IsAllowed)
-            .Select(package => package.Version)
-            .ToHashSet(VersionComparer.VersionReleaseMetadata);
+        var packagesByVersion = packages
+            .GroupBy(package => package.Version, VersionComparer.VersionReleaseMetadata)
+            .ToDictionary(group => group.Key, group => group.First(), VersionComparer.VersionReleaseMetadata);
+
         var versions = (response.Data ?? Array.Empty<string>())
             .Where(version =>
-                NuGetVersion.TryParse(version, out var parsedVersion) &&
-                allowedVersions.Contains(parsedVersion))
+            {
+                if (!NuGetVersion.TryParse(version, out var parsedVersion))
+                {
+                    return false;
+                }
+
+                return packagesByVersion.TryGetValue(parsedVersion, out var package)
+                    ? IsAllowed(package)
+                    : IsAllowed(request.PackageId, parsedVersion, PackageFilterScope.Upstream);
+            })
             .ToList();
 
         return _responseBuilder.BuildAutocomplete(versions);
@@ -188,12 +208,12 @@ public class PackageFilteringSearchService : IPackageSearchService
         CancellationToken cancellationToken)
         => _inner.FindDependentsAsync(packageId, cancellationToken);
 
-    private async Task<PackageRegistration> GetAllowedRegistrationAsync(
+    private async Task<SearchResult> FilterSearchResultAsync(
         SearchResult result,
         CancellationToken cancellationToken)
     {
-        var visibleVersions = GetVisibleVersions(result);
-        if (visibleVersions.Count == 0)
+        var resultVersions = GetSearchResultVersions(result);
+        if (resultVersions.Count == 0)
         {
             return null;
         }
@@ -202,14 +222,25 @@ public class PackageFilteringSearchService : IPackageSearchService
             result.PackageId,
             includeUnlisted: false,
             cancellationToken);
-        var allowedPackages = packages
-            .Where(package => visibleVersions.Contains(package.Version))
-            .Where(IsAllowed)
+        var packagesByVersion = packages
+            .GroupBy(package => package.Version, VersionComparer.VersionReleaseMetadata)
+            .ToDictionary(group => group.Key, group => group.First(), VersionComparer.VersionReleaseMetadata);
+
+        var allowedVersions = resultVersions
+            .Where(version => NuGetVersion.TryParse(version.Version, out _))
+            .Where(version =>
+            {
+                var parsedVersion = NuGetVersion.Parse(version.Version);
+                return packagesByVersion.TryGetValue(parsedVersion, out var package)
+                    ? IsAllowed(package)
+                    : IsAllowed(result.PackageId, parsedVersion, PackageFilterScope.Upstream);
+            })
+            .OrderByDescending(version => NuGetVersion.Parse(version.Version))
             .ToList();
 
-        return allowedPackages.Count == 0
+        return allowedVersions.Count == 0
             ? null
-            : new PackageRegistration(result.PackageId, allowedPackages);
+            : Clone(result, allowedVersions);
     }
 
     private bool IsAllowed(Package package)
@@ -222,24 +253,55 @@ public class PackageFilteringSearchService : IPackageSearchService
             new PackageFilterContext(package.Id, package.Version, scope)).IsBlocked;
     }
 
-    private static HashSet<NuGetVersion> GetVisibleVersions(SearchResult result)
+    private bool IsAllowed(string packageId, NuGetVersion version, PackageFilterScope scope)
     {
-        var versions = new HashSet<NuGetVersion>(VersionComparer.VersionReleaseMetadata);
+        return !_policy.Evaluate(
+            new PackageFilterContext(packageId, version, scope)).IsBlocked;
+    }
 
-        foreach (var item in result.Versions ?? Array.Empty<SearchResultVersion>())
+    private static IReadOnlyList<SearchResultVersion> GetSearchResultVersions(SearchResult result)
+    {
+        if (result.Versions != null && result.Versions.Count > 0)
         {
-            if (NuGetVersion.TryParse(item.Version, out var version))
+            return result.Versions;
+        }
+
+        return string.IsNullOrEmpty(result.Version)
+            ? Array.Empty<SearchResultVersion>()
+            : new[]
             {
-                versions.Add(version);
-            }
-        }
+                new SearchResultVersion
+                {
+                    RegistrationLeafUrl = result.RegistrationIndexUrl,
+                    Version = result.Version,
+                    Downloads = result.TotalDownloads,
+                }
+            };
+    }
 
-        if (versions.Count == 0 && NuGetVersion.TryParse(result.Version, out var latestVersion))
+    private static SearchResult Clone(SearchResult result, List<SearchResultVersion> versions)
+    {
+        var totalDownloads = versions.Any(version => version.Downloads > 0)
+            ? versions.Sum(version => version.Downloads)
+            : result.TotalDownloads;
+
+        return new SearchResult
         {
-            versions.Add(latestVersion);
-        }
-
-        return versions;
+            PackageId = result.PackageId,
+            Version = versions[0].Version,
+            Description = result.Description,
+            Authors = result.Authors,
+            IconUrl = result.IconUrl,
+            LicenseUrl = result.LicenseUrl,
+            PackageTypes = result.PackageTypes,
+            ProjectUrl = result.ProjectUrl,
+            RegistrationIndexUrl = result.RegistrationIndexUrl,
+            Summary = result.Summary,
+            Tags = result.Tags,
+            Title = result.Title,
+            TotalDownloads = totalDownloads,
+            Versions = versions,
+        };
     }
 
     private static int GetTargetCount(int skip, int take)

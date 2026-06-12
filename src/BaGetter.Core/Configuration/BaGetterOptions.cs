@@ -68,11 +68,11 @@ public class BaGetterOptions
 
     public MirrorOptions Mirror { get; set; }
 
-    public PackageFilteringOptions PackageFiltering { get; set; }
-
     public HealthCheckOptions HealthCheck { get; set; }
 
     public StatisticsOptions Statistics { get; set; }
+
+    public PackageFilteringOptions PackageFiltering { get; set; }
 
     public NugetAuthenticationOptions Authentication { get; set; }
 }

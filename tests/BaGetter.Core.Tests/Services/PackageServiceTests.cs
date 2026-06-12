@@ -90,28 +90,6 @@ public class PackageServiceTests
             Assert.Equal("3.0.0", ordered[2].OriginalVersion);
         }
 
-        [Fact]
-        public async Task RemovesBlockedUpstreamVersions()
-        {
-            Setup(upstreamPackages: new List<NuGetVersion>
-            {
-                new NuGetVersion("1.0.0"),
-                new NuGetVersion("2.0.0"),
-            });
-            _policy
-                .Setup(p => p.Evaluate(It.Is<PackageFilterContext>(c =>
-                    c.Scope == PackageFilterScope.Upstream &&
-                    c.Version == new NuGetVersion("2.0.0"))))
-                .Returns(PackageFilterDecision.Block(new PackageFilterRuleOptions()));
-
-            var results = await _target.FindPackageVersionsAsync(
-                "MyPackage",
-                _cancellationToken);
-
-            var result = Assert.Single(results);
-            Assert.Equal("1.0.0", result.OriginalVersion);
-        }
-
         private void Setup(
             IReadOnlyList<Package> localPackages = null,
             IReadOnlyList<NuGetVersion> upstreamPackages = null)
@@ -202,26 +180,6 @@ public class PackageServiceTests
             Assert.Equal("3.0.0", ordered[2].Version.OriginalVersion);
         }
 
-        [Fact]
-        public async Task RemovesBlockedUpstreamMetadata()
-        {
-            Setup(upstreamPackages: new List<Package>
-            {
-                new Package { Id = "MyPackage", Version = new NuGetVersion("1.0.0") },
-                new Package { Id = "MyPackage", Version = new NuGetVersion("2.0.0") },
-            });
-            _policy
-                .Setup(p => p.Evaluate(It.Is<PackageFilterContext>(c =>
-                    c.Scope == PackageFilterScope.Upstream &&
-                    c.Version == new NuGetVersion("2.0.0"))))
-                .Returns(PackageFilterDecision.Block(new PackageFilterRuleOptions()));
-
-            var results = await _target.FindPackagesAsync("MyPackage", _cancellationToken);
-
-            var result = Assert.Single(results);
-            Assert.Equal("1.0.0", result.Version.OriginalVersion);
-        }
-
         private void Setup(
             IReadOnlyList<Package> localPackages = null,
             IReadOnlyList<Package> upstreamPackages = null)
@@ -252,12 +210,11 @@ public class PackageServiceTests
         [Fact]
         public async Task ExistsInDatabase()
         {
-            var expected = new Package
-            {
-                Id = _id,
-                Version = _version
-            };
+            var expected = new Package();
 
+            _db
+                .Setup(p => p.ExistsAsync(_id, _version, _cancellationToken))
+                .ReturnsAsync(true);
             _db
                 .Setup(p => p.FindOrNullAsync(_id, _version,  /*includeUnlisted:*/ true, _cancellationToken))
                 .ReturnsAsync(expected);
@@ -288,12 +245,8 @@ public class PackageServiceTests
         public async Task ExistsInDatabase()
         {
             _db
-                .Setup(p => p.FindOrNullAsync(_id, _version,  /*includeUnlisted:*/ true, _cancellationToken))
-                .ReturnsAsync(new Package
-                {
-                    Id = _id,
-                    Version = _version
-                });
+                .Setup(p => p.ExistsAsync(_id, _version, _cancellationToken))
+                .ReturnsAsync(true);
 
             var result = await _target.ExistsAsync(_id, _version, _cancellationToken);
 
@@ -303,65 +256,13 @@ public class PackageServiceTests
         [Fact]
         public async Task DoesNotExistInDatabase()
         {
-            var result = await _target.ExistsAsync(_id, _version, _cancellationToken);
-
-            Assert.False(result);
-        }
-
-        [Fact]
-        public async Task BlockedDownloadDoesNotCallUpstream()
-        {
-            _policy
-                .Setup(p => p.Evaluate(It.Is<PackageFilterContext>(c =>
-                    c.PackageId == _id &&
-                    c.Version == _version &&
-                    c.Scope == PackageFilterScope.Upstream)))
-                .Returns(PackageFilterDecision.Block(new PackageFilterRuleOptions()));
-
-            var result = await _target.ExistsAsync(_id, _version, _cancellationToken);
-
-            Assert.False(result);
-            _upstream.Verify(
-                u => u.DownloadPackageOrNullAsync(
-                    It.IsAny<string>(),
-                    It.IsAny<NuGetVersion>(),
-                    It.IsAny<CancellationToken>()),
-                Times.Never);
-            _indexer.Verify(
-                i => i.IndexAsync(
-                    It.IsAny<Stream>(),
-                    It.IsAny<string>(),
-                    It.IsAny<CancellationToken>()),
-                Times.Never);
-        }
-
-        [Fact]
-        public async Task BlocksCachedUpstreamPackage()
-        {
             _db
-                .Setup(p => p.FindOrNullAsync(_id, _version,  /*includeUnlisted:*/ true, _cancellationToken))
-                .ReturnsAsync(new Package
-                {
-                    Id = _id,
-                    Version = _version,
-                    CachedFrom = "https://api.nuget.org/v3/index.json"
-                });
-            _policy
-                .Setup(p => p.Evaluate(It.Is<PackageFilterContext>(c =>
-                    c.PackageId == _id &&
-                    c.Version == _version &&
-                    c.Scope == PackageFilterScope.CachedUpstream)))
-                .Returns(PackageFilterDecision.Block(new PackageFilterRuleOptions()));
+                .Setup(p => p.ExistsAsync(_id, _version, _cancellationToken))
+                .ReturnsAsync(false);
 
             var result = await _target.ExistsAsync(_id, _version, _cancellationToken);
 
             Assert.False(result);
-            _upstream.Verify(
-                u => u.DownloadPackageOrNullAsync(
-                    It.IsAny<string>(),
-                    It.IsAny<NuGetVersion>(),
-                    It.IsAny<CancellationToken>()),
-                Times.Never);
         }
     }
 
@@ -376,12 +277,8 @@ public class PackageServiceTests
         public async Task SkipsIfAlreadyMirrored()
         {
             _db
-                .Setup(p => p.FindOrNullAsync(_id, _version,  /*includeUnlisted:*/ true, _cancellationToken))
-                .ReturnsAsync(new Package
-                {
-                    Id = _id,
-                    Version = _version
-                });
+                .Setup(p => p.ExistsAsync(_id, _version, _cancellationToken))
+                .ReturnsAsync(true);
 
             await TargetAsync();
 
@@ -393,6 +290,10 @@ public class PackageServiceTests
         [Fact]
         public async Task SkipsIfUpstreamDoesntHavePackage()
         {
+            _db
+                .Setup(p => p.ExistsAsync(_id, _version, _cancellationToken))
+                .ReturnsAsync(false);
+
             _upstream
                 .Setup(u => u.DownloadPackageOrNullAsync(_id, _version, _cancellationToken))
                 .ReturnsAsync((Stream)null);
@@ -407,6 +308,10 @@ public class PackageServiceTests
         [Fact]
         public async Task SkipsIfUpstreamThrows()
         {
+            _db
+                .Setup(p => p.ExistsAsync(_id, _version, _cancellationToken))
+                .ReturnsAsync(false);
+
             _upstream
                 .Setup(u => u.DownloadPackageOrNullAsync(_id, _version, _cancellationToken))
                 .ThrowsAsync(new InvalidOperationException("Hello world"));
@@ -421,6 +326,10 @@ public class PackageServiceTests
         [Fact]
         public async Task MirrorsPackage()
         {
+            _db
+                .Setup(p => p.ExistsAsync(_id, _version, _cancellationToken))
+                .ReturnsAsync(false);
+
             using var downloadStream = new MemoryStream();
             _upstream
                 .Setup(u => u.DownloadPackageOrNullAsync(_id, _version, _cancellationToken))
@@ -455,7 +364,6 @@ public class PackageServiceTests
         protected readonly Mock<IPackageDatabase> _db;
         protected readonly Mock<IUpstreamClient> _upstream;
         protected readonly Mock<IPackageIndexingService> _indexer;
-        protected readonly Mock<IPackagePolicyEvaluator> _policy;
 
         protected readonly CancellationToken _cancellationToken = CancellationToken.None;
         protected readonly PackageService _target;
@@ -465,16 +373,11 @@ public class PackageServiceTests
             _db = new Mock<IPackageDatabase>();
             _upstream = new Mock<IUpstreamClient>();
             _indexer = new Mock<IPackageIndexingService>();
-            _policy = new Mock<IPackagePolicyEvaluator>();
-            _policy
-                .Setup(p => p.Evaluate(It.IsAny<PackageFilterContext>()))
-                .Returns(PackageFilterDecision.Allow);
 
             _target = new PackageService(
                 _db.Object,
                 _upstream.Object,
                 _indexer.Object,
-                _policy.Object,
                 Mock.Of<ILogger<PackageService>>());
         }
     }

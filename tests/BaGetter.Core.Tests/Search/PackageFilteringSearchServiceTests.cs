@@ -56,6 +56,42 @@ public class PackageFilteringSearchServiceTests
     }
 
     [Fact]
+    public async Task SearchKeepsAllowedUpstreamOnlyPackages()
+    {
+        const string packageId = "Example.UpstreamOnly";
+        var inner = SearchServiceWithResults(SearchResult(packageId, "1.0.0"));
+        var packages = PackageDatabase();
+        var policy = Policy(_ => false);
+        var target = CreateTarget(inner.Object, packages.Object, policy.Object);
+
+        var result = await target.SearchAsync(
+            new SearchRequest { Take = 20 },
+            CancellationToken);
+
+        Assert.Equal(packageId, Assert.Single(result.Data).PackageId);
+    }
+
+    [Fact]
+    public async Task SearchRemovesBlockedUpstreamOnlyVersions()
+    {
+        const string packageId = "Example.UpstreamOnly";
+        var inner = SearchServiceWithResults(SearchResult(packageId, "1.0.0", "2.0.0"));
+        var packages = PackageDatabase();
+        var policy = Policy(context =>
+            context.Scope == PackageFilterScope.Upstream &&
+            context.Version >= NuGetVersion.Parse("2.0.0"));
+        var target = CreateTarget(inner.Object, packages.Object, policy.Object);
+
+        var result = await target.SearchAsync(
+            new SearchRequest { Take = 20 },
+            CancellationToken);
+
+        var package = Assert.Single(result.Data);
+        Assert.Equal("1.0.0", package.Version);
+        Assert.Equal("1.0.0", Assert.Single(package.Versions).Version);
+    }
+
+    [Fact]
     public async Task SearchFillsPageAfterBlockedCachedPackage()
     {
         const string allowedId = "Example.ZAllowed";
@@ -119,6 +155,30 @@ public class PackageFilteringSearchServiceTests
     }
 
     [Fact]
+    public async Task AutocompleteKeepsAllowedUpstreamOnlyPackages()
+    {
+        const string packageId = "Example.UpstreamOnly";
+        var inner = new Mock<ISearchService>();
+        inner
+            .Setup(service => service.AutocompleteAsync(
+                It.IsAny<AutocompleteRequest>(),
+                CancellationToken))
+            .ReturnsAsync(new AutocompleteResponse
+            {
+                Data = new[] { packageId }
+            });
+        var packages = PackageDatabase();
+        var policy = Policy(_ => false);
+        var target = CreateTarget(inner.Object, packages.Object, policy.Object);
+
+        var result = await target.AutocompleteAsync(
+            new AutocompleteRequest { Take = 20 },
+            CancellationToken);
+
+        Assert.Equal(packageId, Assert.Single(result.Data));
+    }
+
+    [Fact]
     public async Task VersionListRemovesBlockedCachedVersions()
     {
         const string packageId = "Example.Package";
@@ -138,6 +198,32 @@ public class PackageFilteringSearchServiceTests
                 CachedPackage(packageId, "2.0.0")
             }));
         var policy = Policy(context => context.Version >= NuGetVersion.Parse("2.0.0"));
+        var target = CreateTarget(inner.Object, packages.Object, policy.Object);
+
+        var result = await target.ListPackageVersionsAsync(
+            new VersionsRequest { PackageId = packageId },
+            CancellationToken);
+
+        Assert.Equal("1.0.0", Assert.Single(result.Data));
+    }
+
+    [Fact]
+    public async Task VersionListKeepsAllowedUpstreamOnlyVersions()
+    {
+        const string packageId = "Example.UpstreamOnly";
+        var inner = new Mock<ISearchService>();
+        inner
+            .Setup(service => service.ListPackageVersionsAsync(
+                It.IsAny<VersionsRequest>(),
+                CancellationToken))
+            .ReturnsAsync(new AutocompleteResponse
+            {
+                Data = new[] { "1.0.0", "2.0.0" }
+            });
+        var packages = PackageDatabase();
+        var policy = Policy(context =>
+            context.Scope == PackageFilterScope.Upstream &&
+            context.Version >= NuGetVersion.Parse("2.0.0"));
         var target = CreateTarget(inner.Object, packages.Object, policy.Object);
 
         var result = await target.ListPackageVersionsAsync(
@@ -199,7 +285,8 @@ public class PackageFilteringSearchServiceTests
                 It.IsAny<string>(),
                 false,
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync((string id, bool _, CancellationToken _) => packagesById[id]);
+            .ReturnsAsync((string id, bool _, CancellationToken _) =>
+                packagesById.GetValueOrDefault(id, Array.Empty<Package>()));
         return database;
     }
 

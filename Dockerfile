@@ -43,10 +43,10 @@ RUN apk add --no-cache icu-libs icu-data-full tzdata
 # disable the invariant mode (set in base image)
 ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=false
 # set default configurations; use the `/data` folder for packages, symbols and the SQLite database
-ENV Storage__Path "/data"
-ENV Search__Type "Database"
-ENV Database__Type "Sqlite"
-ENV Database__ConnectionString "Data Source=/data/db/bagetter.db"
+ENV Storage__Path="/data"
+ENV Search__Type="Database"
+ENV Database__Type="Sqlite"
+ENV Database__ConnectionString="Data Source=/data/db/bagetter.db"
 LABEL org.opencontainers.image.source="https://github.com/bagetter/BaGetter"
 # copy default folders
 COPY --from=publish /data /data
